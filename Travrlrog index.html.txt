@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Travel Log BY KUTOSEA</title>
+    
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="TravelLog">
+    <link rel="apple-touch-icon" href="https://via.placeholder.com/192/007bff/ffffff?text=K">
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exif-js/2.3.0/exif.js"></script>
+
+    <style>
+        :root { --main-blue: #007bff; --bg-gray: #f0f2f5; }
+        body { margin: 0; font-family: -apple-system, sans-serif; background: var(--bg-gray); color: #333; overflow-x: hidden; }
+        
+        /* スプラッシュ画面 */
+        #splash {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--main-blue); color: white;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 9999; transition: opacity 0.8s ease;
+        }
+
+        /* メインUI */
+        #map { height: 45vh; width: 100%; position: sticky; top: 0; z-index: 10; border-bottom: 3px solid white; }
+        .container { padding: 15px; max-width: 500px; margin: auto; }
+        .card { 
+            background: white; padding: 18px; border-radius: 15px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08); margin-bottom: 15px;
+        }
+        .total-box { 
+            background: linear-gradient(135deg, #007bff, #0056b3); color: white; padding: 20px; 
+            border-radius: 15px; text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 15px;
+        }
+        
+        /* 入力パーツ */
+        input, select { 
+            width: 100%; padding: 12px; margin: 10px 0; 
+            border: 1px solid #ddd; border-radius: 10px; font-size: 16px; -webkit-appearance: none;
+        }
+        .btn-main { background:#28a745; color:white; border:none; width:100%; padding:15px; border-radius:10px; font-weight:bold; font-size: 18px; }
+        .btn-play { background:#ffc107; color:#333; border:none; width:100%; padding:12px; border-radius:10px; font-weight:bold; margin-bottom: 10px; }
+        .btn-reset { color:#dc3545; background:none; border:none; width:100%; margin-top:30px; font-size:12px; text-decoration: underline; }
+        
+        #status { font-size: 12px; color: #666; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div id="splash">
+    <h1 style="font-size: 32px; margin-bottom: 5px;">旅行記アプリ</h1>
+    <p style="letter-spacing: 2px; opacity: 0.9;">BY KUTOSEA</p>
+</div>
+
+<div id="map"></div>
+
+<div class="container">
+    <div class="total-box">旅の合計: <span id="totalAmount">0</span> 円</div>
+    
+    <button class="btn-play" onclick="playRoute()">🏃‍♂️ ルートを再生する</button>
+
+    <div class="card">
+        <strong style="font-size: 18px;">📸 新しい記録</strong>
+        <input type="file" id="photoInput" accept="image/*">
+        <select id="category">
+            <option value="食事">食事 🍴</option>
+            <option value="交通">交通 🚃</option>
+            <option value="観光">観光 ⛩️</option>
+            <option value="宿泊">宿泊 🏨</option>
+            <option value="その他">その他 🎁</option>
+        </select>
+        <input type="number" id="amount" placeholder="金額を入力 (円)" inputmode="numeric">
+        <button class="btn-main" onclick="addRecord()">記録を保存</button>
+        <p id="status">位置情報付き写真を選ぶと場所を自動取得します</p>
+    </div>
+
+    <button class="btn-reset" onclick="resetData()">全データを消去してリセット</button>
+</div>
+
+<script>
+    // 初期設定
+    const map = L.map('map', { zoomControl: false }).setView([35.68, 139.76], 5);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    let travelData = JSON.parse(localStorage.getItem('KutoseaTravelData')) || [];
+    let currentPos = [35.6812, 139.7671];
+    let routeLine = null;
+
+    // 起動時の処理
+    window.onload = () => {
+        renderMarkers();
+        setTimeout(() => {
+            const splash = document.getElementById('splash');
+            splash.style.opacity = '0';
+            setTimeout(() => splash.style.display = 'none', 800);
+        }, 2200);
+    };
+
+    // 写真から位置情報を取得
+    document.getElementById('photoInput').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        EXIF.getData(file, function() {
+            const lat = EXIF.getTag(this, "GPSLatitude");
+            const lon = EXIF.getTag(this, "GPSLongitude");
+            if (lat && lon) {
+                const formatCoord = (coord, ref) => {
+                    let d = coord[0] + coord[1] / 60 + coord[2] / 3600;
+                    return (ref === "S" || ref === "W") ? d * -1 : d;
+                };
+                currentPos = [formatCoord(lat, EXIF.getTag(this, "GPSLatitudeRef")), formatCoord(lon, EXIF.getTag(this, "GPSLongitudeRef"))];
+                map.setView(currentPos, 15);
+                document.getElementById('status').innerText = "📍 場所を特定しました！";
+                document.getElementById('status').style.color = "#28a745";
+            } else {
+                document.getElementById('status').innerText = "⚠️ 位置情報が見つかりません";
+                document.getElementById('status').style.color = "#dc3545";
+            }
+        });
+    });
+
+    function addRecord() {
+        const amount = parseInt(document.getElementById('amount').value) || 0;
+        const newEntry = {
+            pos: currentPos,
+            cat: document.getElementById('category').value,
+            amt: amount,
+            time: new Date().toLocaleString()
+        };
+        travelData.push(newEntry);
+        localStorage.setItem('KutoseaTravelData', JSON.stringify(travelData));
+        renderMarkers();
+        document.getElementById('amount').value = "";
+        alert("記録を保存しました！");
+    }
+
+    function renderMarkers() {
+        let total = 0;
+        map.eachLayer(l => { if (l instanceof L.Marker || l instanceof L.Polyline) map.removeLayer(l); });
+
+        travelData.forEach(item => {
+            total += item.amt;
+            L.marker(item.pos).addTo(map).bindPopup(`<b>${item.cat}</b><br>${item.amt}円`);
+        });
+        document.getElementById('totalAmount').innerText = total.toLocaleString();
+    }
+
+    function playRoute() {
+        if (travelData.length < 2) return alert("記録が2件以上必要です");
+        if (routeLine) map.removeLayer(routeLine);
+        routeLine = L.polyline([], {color: '#ffc107', weight: 5, dashArray: '10, 10'}).addTo(map);
+
+        let i = 0;
+        const interval = setInterval(() => {
+            if (i >= travelData.length) { clearInterval(interval); return; }
+            routeLine.addLatLng(travelData[i].pos);
+            map.panTo(travelData[i].pos);
+            i++;
+        }, 1000);
+    }
+
+    function resetData() {
+        if (confirm("全てのデータを消去してよろしいですか？")) {
+            localStorage.removeItem('KutoseaTravelData');
+            location.reload();
+        }
+    }
+</script>
+
+</body>
+</html>
